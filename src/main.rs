@@ -1,17 +1,13 @@
 use pravega_client::client_factory::ClientFactory;
-use pravega_client::event::EventWriter;
 use pravega_client_config::ClientConfigBuilder;
 use pravega_client_shared::{
     Retention, RetentionType, ScaleType, Scaling, Scope, ScopedStream, 
     Stream, StreamConfiguration,
 };
 
-use std::io;
 use std::env;
 use std::thread;
 use std::process;
-use std::io::Read;
-use std::fs::File;
 use std::time::Duration;
 
 mod config;
@@ -27,105 +23,48 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     // Getting config and payload content
     let conf = Config::load_from_file( &args[1].clone() ).expect("Could not read config file.");
-    let message = get_payload(conf.payload_file.clone()).expect("Failed to read the payload file.");
-    let payload = message.to_string().into_bytes();
     
-    // Create scope and stream for the sending
-    init_environment(conf.clone());
+    // Prepare Benchmark
+    println!("Connecting to Pravega {}", conf.address);
+    let client_ini = create_client(conf.clone());
+    let client_snd = create_client(conf.clone());
+    let client_rcv = create_client(conf.clone());
+    
+    let scostr = init_environment(conf.clone(), client_ini);
+    
+    // Starting Benchmark
+    println!("Starting Benchmark");
     
     // Sender Thread
-    let config_cpy  = conf.clone();
-    let handler_snd = thread::spawn(move || {
-        let pravega_config = ClientConfigBuilder::default()
-            .controller_uri( config_cpy.address )
-            .build()
-            .unwrap();
-        
-        let client_factory = ClientFactory::new(pravega_config);
-        client_factory.runtime().block_on(async {
-            // create event stream writer
-            let stream = ScopedStream::from(config_cpy.from.as_str());
-            //let stream = ScopedStream::from(config_cpy.from.as_str());
-            let event_writer = client_factory.create_event_writer(stream.clone());
-            println!("event writer created");
-            
-            write_payload(event_writer, payload).await;
-            println!("event writer sent and flushed data");
-        });
-        thread::sleep(Duration::from_secs(1));
-    });
-    
     let config_cpy = conf.clone();
-    let handler_rcv = thread::spawn(move || {
-        thread::sleep(Duration::from_secs(1));
-        let pravega_config = ClientConfigBuilder::default()
-            .controller_uri( config_cpy.address )
-            .build()
-            .unwrap();
-        
-        let client_factory = ClientFactory::new(pravega_config);
-        client_factory.runtime().block_on(async {
-            // create event stream writer
-            let stream = ScopedStream::from(config_cpy.from.as_str());
-            
-            // create event stream reader
-            let rg = client_factory.create_reader_group("rg".to_string(), stream).await;
-            let mut reader = rg.create_reader("r1".to_string()).await;
-            println!("event reader created");
-            
-            // read from segment
-            if let Some(mut slice) = reader
-                .acquire_segment()
-                .await
-                .expect("Failed to acquire segment since the reader is offline")
-            {
-                let read_event = slice.next();
-                assert!(read_event.is_some(), "event slice should have event to read");
-                assert_eq!(message.to_string().as_bytes(), read_event.unwrap().value.as_slice());
-                println!("event reader read data");
-            } else {
-                println!("no data to read from the Pravega stream");
-                panic!("read should return the written event.")
-            }
-
-            reader
-                .reader_offline()
-                .await
-                .expect("failed to mark the reader offline");
-            println!("event write and read example finished");
-        });
-        thread::sleep(Duration::from_secs(1));
+    let scostr_cpy = scostr.clone();
+    let handler_snd = thread::spawn(move || {
+        handler_sender(config_cpy, client_snd, scostr_cpy);
     });
     
+    // Receiver Thread
+    let scostr_cpy = scostr.clone();
+    let handler_rcv = thread::spawn(move || { 
+        handler_receiver(client_rcv, scostr_cpy);
+    });
+    
+    // Finishing Benchmark
     handler_snd.join().unwrap();
     handler_rcv.join().unwrap();
+    println!("Benchmark finished");
     Ok(())
 }
 
-fn get_payload(path: String) -> Result<String, io::Error> {
-    let mut file = File::open(path)?;
-    let mut content = String::new();
-    
-    file.read_to_string(&mut content)?;
-    Ok(content)
-}
-
-async fn write_payload(mut event_writer: EventWriter, payload: Vec<u8>) {
-    let result = event_writer.write_event(payload).await;
-    assert!(result.await.is_ok());
-}
-
-fn init_environment(conf: Config) {
-    // Connect to Pravega and send data
-    println!("Connecting to Pravega {}", conf.address);
-    let pravega_config = ClientConfigBuilder::default()
+fn create_client(conf: Config) -> ClientFactory {
+    let pravega_conf = ClientConfigBuilder::default()
         .controller_uri( conf.address )
         .build()
         .unwrap();
-    
-    let client_factory = ClientFactory::new(pravega_config);
-    println!("client factory created");
-    
+    let client_factory = ClientFactory::new(pravega_conf);
+    client_factory
+}
+
+fn init_environment(conf: Config, client_factory: ClientFactory) -> ScopedStream {
     client_factory.runtime().block_on(async {
         let controller_client = client_factory.controller_client();
         // create a scope
@@ -161,5 +100,50 @@ fn init_environment(conf: Config) {
             .expect("create stream");
         println!("stream {} created", conf.stream);
     });
+    
+    let stream = ScopedStream {
+        scope:  Scope::from( conf.scope ),
+        stream: Stream::from( conf.stream ),
+    };
+    stream
 }
+
+fn handler_sender(conf: Config, client_factory: ClientFactory, scostr: ScopedStream) {
+    let payload = conf.message.to_string().into_bytes();
+    client_factory.runtime().block_on(async {
+        let mut event_writer = client_factory.create_event_writer(scostr);
+        
+        for i in 1..=conf.message_num {
+            let result = event_writer.write_event(payload.clone()).await;
+            assert!(result.await.is_ok());
+            println!("\t + event sent and flushed {}", i);
+        }
+    });
+    thread::sleep(Duration::from_secs(1));
+}
+
+fn handler_receiver(client_factory: ClientFactory, scostr: ScopedStream) {
+    client_factory.runtime().block_on(async {
+        // create event stream reader
+        let rg = client_factory.create_reader_group("rg".to_string(), scostr).await;
+        let mut reader = rg.create_reader("r1".to_string()).await;
+        
+        thread::sleep(Duration::from_secs(1));
+        if let Some(mut segment_slice) =  reader.acquire_segment().await.expect("Failed to acquire segment since the reader is offline") {
+            while let Some(event) = segment_slice.next() {
+                println!("\t - read an event {} ", event.value.len() );
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+        reader
+            .reader_offline()
+            .await
+            .expect("failed to mark the reader offline");
+    });
+}
+
+
+
+
+
 
