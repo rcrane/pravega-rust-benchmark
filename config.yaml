@@ -2,6 +2,4 @@
 name: TEST
 address: "localhost:9090"
 payload_file: "payload/payload-100b.data"
-message_size: 100
-producer_rate: 100
-test_duration_minutes: 5
+message_num: 100
