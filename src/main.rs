@@ -15,10 +15,9 @@ use chrono::prelude::Utc;
 
 mod config;
 use config::Config;
-/*
+
 mod stats;
 use stats::Stats;
-*/
 
 const START_CONSTANT:  i32 = 5;
 const WARMUP_MESSAGES: i32 = 5;
@@ -32,22 +31,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     
     // Getting config and payload content
+    let mut stats = Stats::new();
     let conf = Config::load_from_file( &args[1].clone() ).expect("Could not read config file.");
 
     // Starting Threads
-    let (tx, rx) = mpsc::channel();
+    let (tx1, rx1) = mpsc::channel(); // Start Signal
+    let (tx2, rx2) = mpsc::channel(); // Latencies
+
     let config_cpy = conf.clone();
     let handler_snd = thread::spawn(move || {
-        sender_handler(tx, config_cpy);
+        sender_handler(tx1, tx2, config_cpy);
     });
 
     let config_cpy = conf.clone();
     let handler_rcv = thread::spawn(move || { 
-        receiver_handler(rx, config_cpy);
+        receiver_handler(rx1, config_cpy);
     });
 
     handler_snd.join().unwrap();
     handler_rcv.join().unwrap();
+
+    // get ouput data from threads
+    for received in rx2 {
+        stats.write_latencies.push(received);
+    }
+    stats.calculate_metrics(conf.message_num, conf.message_size);
+    stats.to_file().expect("Failed to write results.");
     println!("Benchmark finished");
     Ok(())
 }
@@ -67,8 +76,9 @@ fn get_latency(start_time: DateTime<chrono::Utc>, ends_time: DateTime<chrono::Ut
     latency
 }
 
-fn sender_handler(tx: mpsc::Sender<i32>, conf: Config) {
+fn sender_handler(signal: mpsc::Sender<i32>, out: mpsc::Sender<f64>, conf: Config) {
     println!("Connecting to Pravega {}", conf.address);
+    let mut wlatency: Vec<f64> = Vec::new();
     let payload = conf.message.to_string().into_bytes();
     let client_factory = create_client(conf.address);
     
@@ -123,7 +133,7 @@ fn sender_handler(tx: mpsc::Sender<i32>, conf: Config) {
             println!("\t + Send Msg {}", i);
         }
     });
-    tx.send(START_CONSTANT).unwrap();
+    signal.send(START_CONSTANT).unwrap();
 
     println!("Starting Benchmark");
     client_factory.runtime().block_on(async {
@@ -134,17 +144,19 @@ fn sender_handler(tx: mpsc::Sender<i32>, conf: Config) {
             let time2 = Utc::now();
             let latency = get_latency(time1, time2);
             println!("\t + Msg {} Write Latency {} ms", i, latency);
+            wlatency.push(latency);
+            out.send(latency).unwrap();
         }
     });
-    thread::sleep(Duration::from_secs(1));
+    //thread::sleep(Duration::from_secs(1));
 }
 
-fn receiver_handler(rx: mpsc::Receiver<i32>, conf: Config) {
+fn receiver_handler(signal: mpsc::Receiver<i32>, conf: Config) {
     let client_factory = create_client(conf.address);
     // Pause before everything is working
     loop {
         // Check for pause signal
-        if let Ok(msg) = rx.try_recv() {
+        if let Ok(msg) = signal.try_recv() {
             if msg == START_CONSTANT {
                 break;
             }

@@ -1946,6 +1946,7 @@ dependencies = [
  "pravega-client-config",
  "pravega-client-shared",
  "serde",
+ "serde_json",
  "serde_yaml",
  "tokio 1.41.1",
 ]
