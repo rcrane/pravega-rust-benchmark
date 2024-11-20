@@ -1,25 +1,29 @@
-use pravega_client::client_factory::ClientFactory;
-use pravega_client_config::ClientConfigBuilder;
-use pravega_client_shared::{
-    Retention, RetentionType, ScaleType, Scaling, Scope,
-    ScopedStream, Stream, StreamConfiguration,
-};
+mod config;
+mod result;
+mod channel_data;
 
 use std::env;
 use std::thread;
 use std::process;
+use config::Config;
 use std::sync::mpsc;
+use result::TestResult;
 use chrono::DateTime;
 use std::time::Duration;
 use chrono::prelude::Utc;
+use channel_data::ChannelData;
+use pravega_client_shared::Scope;
+use pravega_client_shared::Stream;
+use pravega_client_shared::Scaling;
+use pravega_client_shared::Retention;
+use pravega_client_shared::ScaleType;
+use pravega_client_shared::ScopedStream;
+use pravega_client_shared::RetentionType;
+use pravega_client_shared::StreamConfiguration;
+use pravega_client_config::ClientConfigBuilder;
+use pravega_client::client_factory::ClientFactory;
 
-mod config;
-use config::Config;
-
-mod stats;
-use stats::Stats;
-
-const START_CONSTANT:  i32 = 5;
+const START_CONSTANT:  i32 = 95;
 const WARMUP_MESSAGES: i32 = 5;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -31,13 +35,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     
     // Getting config and payload content
-    let mut stats = Stats::new();
     let conf = Config::load_from_file( &args[1].clone() ).expect("Could not read config file.");
 
     // Starting Threads
     let (tx1, rx1) = mpsc::channel(); // Start Signal
     let (tx2, rx2) = mpsc::channel(); // Latencies
 
+    let tx3 = tx2.clone();
     let config_cpy = conf.clone();
     let handler_snd = thread::spawn(move || {
         sender_handler(tx1, tx2, config_cpy);
@@ -45,18 +49,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config_cpy = conf.clone();
     let handler_rcv = thread::spawn(move || { 
-        receiver_handler(rx1, config_cpy);
+        receiver_handler(rx1, tx3, config_cpy);
     });
 
     handler_snd.join().unwrap();
     handler_rcv.join().unwrap();
 
     // get ouput data from threads
+    let mut result = TestResult::new(conf);
     for received in rx2 {
-        stats.write_latencies.push(received);
+        match received {
+            ChannelData::Stream(value)       => result.stream = value,
+            ChannelData::Scope(value)        => result.scope = value,
+            ChannelData::WriteLatency(value) => result.write_latencies.push(value),
+            ChannelData::ReadLatency(value)  => result.read_latencies.push(value)
+        }
     }
-    stats.calculate_metrics(conf.message_num, conf.message_size);
-    stats.to_file().expect("Failed to write results.");
+    result.calculate_metrics();
+    result.to_file().expect("Failed to write results.");
     println!("Benchmark finished");
     Ok(())
 }
@@ -76,13 +86,19 @@ fn get_latency(start_time: DateTime<chrono::Utc>, ends_time: DateTime<chrono::Ut
     latency
 }
 
-fn sender_handler(signal: mpsc::Sender<i32>, out: mpsc::Sender<f64>, conf: Config) {
+fn get_scoped_stream(conf_scope: String, conf_stream: String) -> ScopedStream {
+    let scoped_stream = ScopedStream {
+        scope:  Scope::from( conf_scope ),
+        stream: Stream::from( conf_stream ),
+    };
+    scoped_stream
+}
+
+fn sender_handler(signal: mpsc::Sender<i32>, out: mpsc::Sender<ChannelData>, conf: Config) {
     println!("Connecting to Pravega {}", conf.address);
-    let mut wlatency: Vec<f64> = Vec::new();
     let payload = conf.message.to_string().into_bytes();
     let client_factory = create_client(conf.address);
     
-
     println!("Init Environtment");
     client_factory.runtime().block_on(async {
         let controller_client = client_factory.controller_client();
@@ -92,7 +108,8 @@ fn sender_handler(signal: mpsc::Sender<i32>, out: mpsc::Sender<f64>, conf: Confi
             .create_scope(&scope)
             .await
             .expect("create scope");
-        println!("scope {} created", conf.scope);
+        out.send(ChannelData::Scope(conf.scope.clone())).unwrap();
+        println!("\t scope {} created", conf.scope);
 
         // create a stream containing only one segment
         let stream = Stream::from(conf.stream.to_owned());
@@ -117,15 +134,13 @@ fn sender_handler(signal: mpsc::Sender<i32>, out: mpsc::Sender<f64>, conf: Confi
             .create_stream(&stream_config)
             .await
             .expect("create stream");
-        println!("stream {} created", conf.stream);
+        out.send(ChannelData::Stream(conf.stream.clone())).unwrap();
+        println!("\t stream {} created", conf.stream);
     });
-    let scostr = ScopedStream {
-        scope:  Scope::from( conf.scope ),
-        stream: Stream::from( conf.stream ),
-    };
-    let mut event_writer = client_factory.create_event_writer(scostr);
-
+    
     println!("Starting WarmUp");
+    let scoped_stream = get_scoped_stream(conf.scope, conf.stream);
+    let mut event_writer = client_factory.create_event_writer(scoped_stream);
     client_factory.runtime().block_on(async {
         for i in 1..=WARMUP_MESSAGES {
             let result = event_writer.write_event(payload.clone()).await;
@@ -144,39 +159,30 @@ fn sender_handler(signal: mpsc::Sender<i32>, out: mpsc::Sender<f64>, conf: Confi
             let time2 = Utc::now();
             let latency = get_latency(time1, time2);
             println!("\t + Msg {} Write Latency {} ms", i, latency);
-            wlatency.push(latency);
-            out.send(latency).unwrap();
+            out.send(ChannelData::WriteLatency(latency)).unwrap();
         }
     });
-    //thread::sleep(Duration::from_secs(1));
 }
 
-fn receiver_handler(signal: mpsc::Receiver<i32>, conf: Config) {
+fn receiver_handler(signal: mpsc::Receiver<i32>, out: mpsc::Sender<ChannelData>, conf: Config) {
     let client_factory = create_client(conf.address);
     // Pause before everything is working
     loop {
-        // Check for pause signal
         if let Ok(msg) = signal.try_recv() {
             if msg == START_CONSTANT {
                 break;
             }
         }
-        //thread::sleep(Duration::from_secs(1));
         thread::sleep(Duration::from_millis(10));
     }
 
-    let scostr = ScopedStream {
-        scope:  Scope::from( conf.scope ),
-        stream: Stream::from( conf.stream ),
-    };
     let mut i = 0;
+    let scoped_stream = get_scoped_stream(conf.scope, conf.stream);
     client_factory.runtime().block_on(async {
-        // create event stream reader
-        let rg = client_factory.create_reader_group("rg".to_string(), scostr).await;
+        let rg = client_factory.create_reader_group("rg".to_string(), scoped_stream).await;
         let mut reader = rg.create_reader("r1".to_string()).await;
         
         if let Some(mut segment_slice) = reader.acquire_segment().await.expect("Failed to acquire segment since the reader is offline") {
-            thread::sleep(Duration::from_secs(1));
             loop {
                 let time1 = Utc::now();
                 if let Some(event) = segment_slice.next() {
@@ -184,6 +190,9 @@ fn receiver_handler(signal: mpsc::Receiver<i32>, conf: Config) {
                     let latency = get_latency(time1, time2);
                     i += 1;
                     println!("\t - Msg {} Len {} Read Latency {} ms", i, event.value.len(), latency);
+                    if i > WARMUP_MESSAGES {
+                        out.send(ChannelData::ReadLatency(latency)).unwrap();
+                    }
                     thread::sleep(Duration::from_millis(50));
                 } else {
                     break;
