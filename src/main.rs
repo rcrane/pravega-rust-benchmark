@@ -24,7 +24,7 @@ use pravega_client_config::ClientConfigBuilder;
 use pravega_client::client_factory::ClientFactory;
 
 const START_CONSTANT:  i32 = 95;
-const WARMUP_MESSAGES: i32 = 5;
+const WARMUP_MESSAGES: u32 = 5;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Getting the workload file configuration form command line parameters
@@ -59,8 +59,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut result = TestResult::new(conf);
     for received in rx2 {
         match received {
-            ChannelData::Stream(value)       => result.stream = value,
-            ChannelData::Scope(value)        => result.scope = value,
             ChannelData::WriteLatency(value) => result.write_latencies.push(value),
             ChannelData::ReadLatency(value)  => result.read_latencies.push(value)
         }
@@ -104,11 +102,9 @@ fn sender_handler(signal: mpsc::Sender<i32>, out: mpsc::Sender<ChannelData>, con
         let controller_client = client_factory.controller_client();
         // create a scope
         let scope = Scope::from(conf.scope.to_owned());
-        controller_client
-            .create_scope(&scope)
+        controller_client.create_scope(&scope)
             .await
             .expect("create scope");
-        out.send(ChannelData::Scope(conf.scope.clone())).unwrap();
         println!("\t scope {} created", conf.scope);
 
         // create a stream containing only one segment
@@ -134,24 +130,19 @@ fn sender_handler(signal: mpsc::Sender<i32>, out: mpsc::Sender<ChannelData>, con
             .create_stream(&stream_config)
             .await
             .expect("create stream");
-        out.send(ChannelData::Stream(conf.stream.clone())).unwrap();
         println!("\t stream {} created", conf.stream);
-    });
-    
-    println!("Starting WarmUp");
-    let scoped_stream = get_scoped_stream(conf.scope, conf.stream);
-    let mut event_writer = client_factory.create_event_writer(scoped_stream);
-    client_factory.runtime().block_on(async {
+
+        println!("Starting WarmUp");
+        let scoped_stream = get_scoped_stream(conf.scope, conf.stream);
+        let mut event_writer = client_factory.create_event_writer(scoped_stream);
         for i in 1..=WARMUP_MESSAGES {
             let result = event_writer.write_event(payload.clone()).await;
             assert!(result.await.is_ok());
             println!("\t + Send Msg {}", i);
         }
-    });
-    signal.send(START_CONSTANT).unwrap();
 
-    println!("Starting Benchmark");
-    client_factory.runtime().block_on(async {
+        signal.send(START_CONSTANT).unwrap();
+        println!("Starting Benchmark");
         for i in 1..=conf.message_num {
             let time1 = Utc::now();
             let result = event_writer.write_event(payload.clone()).await;
@@ -175,27 +166,43 @@ fn receiver_handler(signal: mpsc::Receiver<i32>, out: mpsc::Sender<ChannelData>,
         }
         thread::sleep(Duration::from_millis(10));
     }
-
+    // Start Reading Messages
     let mut i = 0;
     let scoped_stream = get_scoped_stream(conf.scope, conf.stream);
     client_factory.runtime().block_on(async {
         let rg = client_factory.create_reader_group("rg".to_string(), scoped_stream).await;
         let mut reader = rg.create_reader("r1".to_string()).await;
         
-        if let Some(mut segment_slice) = reader.acquire_segment().await.expect("Failed to acquire segment since the reader is offline") {
+        if let Some(mut slice) = reader
+            .acquire_segment()
+            .await
+            .expect("Failed to acquire segment since the reader is offline")
+        {
             loop {
                 let time1 = Utc::now();
-                if let Some(event) = segment_slice.next() {
-                    let time2 = Utc::now();
-                    let latency = get_latency(time1, time2);
+                let read_event = slice.next();
+                let time2 = Utc::now();
+                if read_event.is_some() {
                     i += 1;
-                    println!("\t - Msg {} Len {} Read Latency {} ms", i, event.value.len(), latency);
+                    let latency = get_latency(time1, time2);
+                    let event_len = read_event.unwrap().value.as_slice().len();
+                    assert_eq!(event_len, conf.message_size);
+                    println!("\t - Msg {} Len {} Read Latency {} ms", i, event_len, latency);
                     if i > WARMUP_MESSAGES {
                         out.send(ChannelData::ReadLatency(latency)).unwrap();
                     }
-                    thread::sleep(Duration::from_millis(50));
                 } else {
-                    break;
+                    reader.release_segment(slice).await.unwrap();
+                    if let Some(new_slice) = reader
+                        .acquire_segment()
+                        .await
+                        .expect("Failed to acquire segment since the reader is offline")
+                    {
+                        slice = new_slice;
+                    } else {
+                        println!("\t - No more data to read");
+                        break;
+                    }
                 }
             }
         }

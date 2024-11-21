@@ -1,5 +1,5 @@
 # Workload configuration file
-name: TEST
+name: CONFIG_EXAMPLE
 address: "localhost:9090"
-payload_file: "payload/payload-100b.data"
-message_num: 15
+payload_file: "payload/paper5"
+message_num: 1000
