@@ -59,8 +59,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut result = TestResult::new(conf);
     for received in rx2 {
         match received {
-            ChannelData::WriteLatency(value) => result.write_latencies.push(value),
-            ChannelData::ReadLatency(value)  => result.read_latencies.push(value)
+            ChannelData::WriteLatency(value)  => result.write_latencies.push(value),
+            ChannelData::ReadLatency(value)   => result.read_latencies.push(value),
+            ChannelData::WriteDuration(value) => result.duration = value
         }
     }
     result.calculate_metrics();
@@ -78,10 +79,10 @@ fn create_client(address: String) -> ClientFactory {
     client_factory
 }
 
-fn get_latency(start_time: DateTime<chrono::Utc>, ends_time: DateTime<chrono::Utc>) -> f64 {
+fn get_difference(start_time: DateTime<chrono::Utc>, ends_time: DateTime<chrono::Utc>) -> f64 {
     let difference = ends_time - start_time;
-    let latency = difference.num_milliseconds() as f64 + (difference.num_microseconds().unwrap() % 1000) as f64 / 1000.0;
-    latency
+    let time = difference.num_milliseconds() as f64 + (difference.num_microseconds().unwrap() % 1000) as f64 / 1000.0;
+    time
 }
 
 fn get_scoped_stream(conf_scope: String, conf_stream: String) -> ScopedStream {
@@ -111,18 +112,18 @@ fn sender_handler(signal: mpsc::Sender<i32>, out: mpsc::Sender<ChannelData>, con
         let stream = Stream::from(conf.stream.to_owned());
         let stream_config = StreamConfiguration {
             scoped_stream: ScopedStream {
-                scope: scope.clone(),
+                scope:  scope.clone(),
                 stream: stream.clone(),
             },
             scaling: Scaling {
-                scale_type: ScaleType::FixedNumSegments,
-                target_rate: 0,
-                scale_factor: 0,
-                min_num_segments: 1,
+                scale_type:       ScaleType::ByRateInEventsPerSec,
+                target_rate:      conf.target_rate,
+                scale_factor:     conf.scale_factor,
+                min_num_segments: conf.min_num_segments,
             },
             retention: Retention {
-                retention_type: RetentionType::None,
-                retention_param: 0,
+                retention_type:  RetentionType::Time,
+                retention_param: conf.retention_time,
             },
             tags: None,
         };
@@ -143,15 +144,19 @@ fn sender_handler(signal: mpsc::Sender<i32>, out: mpsc::Sender<ChannelData>, con
 
         signal.send(START_CONSTANT).unwrap();
         println!("Starting Benchmark");
+        let ben_start = Utc::now();
         for i in 1..=conf.message_num {
             let time1 = Utc::now();
             let result = event_writer.write_event(payload.clone()).await;
             assert!(result.await.is_ok());
             let time2 = Utc::now();
-            let latency = get_latency(time1, time2);
+            let latency = get_difference(time1, time2);
             println!("\t + Msg {} Write Latency {} ms", i, latency);
             out.send(ChannelData::WriteLatency(latency)).unwrap();
         }
+        let ben_ends = Utc::now();
+        let duration = get_difference(ben_start, ben_ends);
+        out.send(ChannelData::WriteDuration(duration)).unwrap();
     });
 }
 
@@ -184,7 +189,7 @@ fn receiver_handler(signal: mpsc::Receiver<i32>, out: mpsc::Sender<ChannelData>,
                 let time2 = Utc::now();
                 if read_event.is_some() {
                     i += 1;
-                    let latency = get_latency(time1, time2);
+                    let latency = get_difference(time1, time2);
                     let event_len = read_event.unwrap().value.as_slice().len();
                     assert_eq!(event_len, conf.message_size);
                     println!("\t - Msg {} Len {} Read Latency {} ms", i, event_len, latency);

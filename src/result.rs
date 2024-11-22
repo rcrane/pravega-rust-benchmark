@@ -1,9 +1,8 @@
 use std::fs::File;
 use std::io::Write;
 use chrono::prelude::*;
-use serde::{Deserialize, Serialize};
-
 use crate::config::Config;
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
 pub struct TestResult {
@@ -20,7 +19,7 @@ pub struct TestResult {
     pub write_latency_95pct: f64,
     pub write_latency_99pct: f64,
     pub write_latencies:     Vec<f64>,
-    pub read_latencies:     Vec<f64>,
+    pub read_latencies:      Vec<f64>,
     pub throughput:          f64
 }
 
@@ -59,12 +58,14 @@ impl TestResult {
     pub fn calculate_metrics(&mut self) {
         // Sort latencies
         self.write_latencies.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        self.duration = self.write_latencies.iter().sum();
         // Calculate latency percentiles
         self.write_latency_50pct = Self::percentile(&self.write_latencies, 50.0);
         self.write_latency_75pct = Self::percentile(&self.write_latencies, 75.0);
         self.write_latency_95pct = Self::percentile(&self.write_latencies, 95.0);
         self.write_latency_99pct = Self::percentile(&self.write_latencies, 99.0);
+
+        self.write_latencies.clear();
+        self.read_latencies.clear();
         /*
         Throughput = Total Output / Total Time
         Total Output: total bits sent (messages sent x message size)
