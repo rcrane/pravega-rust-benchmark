@@ -11,12 +11,13 @@ struct ConfigYaml {
     pub address:        String,
     pub payload_file:   String,
     pub message_num:    u32,
+    pub producer_rate:  u32,
     pub scope:          Option<String>,
     pub stream:         Option<String>,
     pub retention_time: Option<i64>,
-    pub target_rate:      Option<i32>,
+    pub scale_target_rate:      Option<i32>,
     pub scale_factor:     Option<i32>,
-    pub min_num_segments: Option<i32>,
+    pub scale_min_num_segments: Option<i32>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -29,10 +30,11 @@ pub struct Config {
     pub message_num:      u32,
     pub scope:            String,
     pub stream:           String,
+    pub producer_rate:    u32,
     pub retention_time:   i64,
-    pub target_rate:      i32,
+    pub scale_target_rate:      i32,
     pub scale_factor:     i32,
-    pub min_num_segments: i32,
+    pub scale_min_num_segments: i32,
 }
 
 impl Config {
@@ -47,9 +49,10 @@ impl Config {
             scope:        "".to_string(),
             stream:       "".to_string(),
             retention_time:   10,
-            target_rate:      1,
-            scale_factor:     0,
-            min_num_segments: 1,
+            producer_rate: 0,
+            scale_target_rate:      1,
+            scale_factor:           0,
+            scale_min_num_segments: 1,
         }
     }
 
@@ -64,6 +67,7 @@ impl Config {
         conf.message_num   = conf_yaml.message_num;
         conf.message       = Self::get_payload(conf.payload_file.clone()).expect("Failed to read the payload file.");
         conf.message_size  = conf.message.len();
+        conf.producer_rate = conf_yaml.producer_rate;
         
         if conf_yaml.scope == None {
             conf.scope = Self::generate_name("scope".to_string());
@@ -78,14 +82,14 @@ impl Config {
         if conf_yaml.retention_time != None {
             conf.retention_time = conf_yaml.retention_time.unwrap_or(conf.retention_time);
         }
-        if conf_yaml.target_rate != None {
-            conf.target_rate = conf_yaml.target_rate.unwrap_or(conf.target_rate);
+        if conf_yaml.scale_target_rate != None {
+            conf.scale_target_rate = conf_yaml.scale_target_rate.unwrap_or(conf.scale_target_rate);
         }
         if conf_yaml.scale_factor != None {
             conf.scale_factor = conf_yaml.scale_factor.unwrap_or(conf.scale_factor);
         }
-        if conf_yaml.min_num_segments != None {
-            conf.min_num_segments = conf_yaml.min_num_segments.unwrap_or(conf.min_num_segments);
+        if conf_yaml.scale_min_num_segments != None {
+            conf.scale_min_num_segments = conf_yaml.scale_min_num_segments.unwrap_or(conf.scale_min_num_segments);
         }
         Ok(conf)
     }

@@ -58,14 +58,15 @@ impl TestResult {
     pub fn calculate_metrics(&mut self) {
         // Sort latencies
         self.write_latencies.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        self.read_latencies.sort_by(|a, b| a.partial_cmp(b).unwrap());
         // Calculate latency percentiles
         self.write_latency_50pct = Self::percentile(&self.write_latencies, 50.0);
         self.write_latency_75pct = Self::percentile(&self.write_latencies, 75.0);
         self.write_latency_95pct = Self::percentile(&self.write_latencies, 95.0);
         self.write_latency_99pct = Self::percentile(&self.write_latencies, 99.0);
 
-        self.write_latencies.clear();
-        self.read_latencies.clear();
+        //self.write_latencies.clear();
+        //self.read_latencies.clear();
         /*
         Throughput = Total Output / Total Time
         Total Output: total bits sent (messages sent x message size)

@@ -3,3 +3,4 @@ name: CONFIG_EXAMPLE
 address: "localhost:9090"
 payload_file: "payload/payload-100b.data"
 message_num: 10
+producer_rate: 2

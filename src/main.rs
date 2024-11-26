@@ -5,10 +5,14 @@ mod channel_data;
 use std::env;
 use std::thread;
 use std::process;
+
 use config::Config;
+use std::sync::Arc;
 use std::sync::mpsc;
-use result::TestResult;
+use async_std::task;
+use std::sync::Mutex;
 use chrono::DateTime;
+use result::TestResult;
 use std::time::Duration;
 use chrono::prelude::Utc;
 use channel_data::ChannelData;
@@ -17,6 +21,7 @@ use pravega_client_shared::Stream;
 use pravega_client_shared::Scaling;
 use pravega_client_shared::Retention;
 use pravega_client_shared::ScaleType;
+use pravega_client::event::EventWriter;
 use pravega_client_shared::ScopedStream;
 use pravega_client_shared::RetentionType;
 use pravega_client_shared::StreamConfiguration;
@@ -93,10 +98,44 @@ fn get_scoped_stream(conf_scope: String, conf_stream: String) -> ScopedStream {
     scoped_stream
 }
 
+fn get_stream_config(conf: Config, scope: Scope) -> StreamConfiguration {
+    let stream = Stream::from(conf.stream.to_owned());
+    let stream_config = StreamConfiguration {
+        scoped_stream: ScopedStream {
+            scope:  scope.clone(),
+            stream: stream.clone(),
+        },
+        scaling: Scaling {
+            scale_type:       ScaleType::ByRateInEventsPerSec,
+            target_rate:      conf.scale_target_rate,
+            scale_factor:     conf.scale_factor,
+            min_num_segments: conf.scale_min_num_segments,
+        },
+        retention: Retention {
+            retention_type:  RetentionType::Time,
+            retention_param: conf.retention_time,
+        },
+        tags: None,
+    };
+    stream_config
+}
+
+async fn write_one_event(i: u32, arc_event_writer: Arc<Mutex<EventWriter>>, payload: Vec<u8>) -> f64 {
+    let mut event_writer = arc_event_writer.lock().unwrap();
+    let start_time = Utc::now();
+    let result = event_writer.write_event(payload).await;
+    assert!(result.await.is_ok());
+    let end_time = Utc::now();
+
+    let latency = get_difference(start_time, end_time);
+    println!("\t + Msg {} Write Latency {} ms", i, latency);
+    latency
+}
+
 fn sender_handler(signal: mpsc::Sender<i32>, out: mpsc::Sender<ChannelData>, conf: Config) {
     println!("Connecting to Pravega {}", conf.address);
     let payload = conf.message.to_string().into_bytes();
-    let client_factory = create_client(conf.address);
+    let client_factory = create_client(conf.address.clone());
     
     println!("Init Environtment");
     client_factory.runtime().block_on(async {
@@ -109,24 +148,7 @@ fn sender_handler(signal: mpsc::Sender<i32>, out: mpsc::Sender<ChannelData>, con
         println!("\t scope {} created", conf.scope);
 
         // create a stream containing only one segment
-        let stream = Stream::from(conf.stream.to_owned());
-        let stream_config = StreamConfiguration {
-            scoped_stream: ScopedStream {
-                scope:  scope.clone(),
-                stream: stream.clone(),
-            },
-            scaling: Scaling {
-                scale_type:       ScaleType::ByRateInEventsPerSec,
-                target_rate:      conf.target_rate,
-                scale_factor:     conf.scale_factor,
-                min_num_segments: conf.min_num_segments,
-            },
-            retention: Retention {
-                retention_type:  RetentionType::Time,
-                retention_param: conf.retention_time,
-            },
-            tags: None,
-        };
+        let stream_config = get_stream_config(conf.clone(), scope.clone());
         controller_client
             .create_stream(&stream_config)
             .await
@@ -135,23 +157,39 @@ fn sender_handler(signal: mpsc::Sender<i32>, out: mpsc::Sender<ChannelData>, con
 
         println!("Starting WarmUp");
         let scoped_stream = get_scoped_stream(conf.scope, conf.stream);
-        let mut event_writer = client_factory.create_event_writer(scoped_stream);
+        let event_writer = client_factory.create_event_writer(scoped_stream);
+        let shared_event_writer = Arc::new(Mutex::new(event_writer));
+
+        let arc_event_writer = Arc::clone(&shared_event_writer);
         for i in 1..=WARMUP_MESSAGES {
+            let mut event_writer = arc_event_writer.lock().unwrap();
             let result = event_writer.write_event(payload.clone()).await;
             assert!(result.await.is_ok());
             println!("\t + Send Msg {}", i);
         }
 
-        signal.send(START_CONSTANT).unwrap();
         println!("Starting Benchmark");
+        signal.send(START_CONSTANT).unwrap();
+        
+        let mut handles = Vec::with_capacity(conf.message_num as usize);
+        
         let ben_start = Utc::now();
         for i in 1..=conf.message_num {
-            let time1 = Utc::now();
-            let result = event_writer.write_event(payload.clone()).await;
-            assert!(result.await.is_ok());
-            let time2 = Utc::now();
-            let latency = get_difference(time1, time2);
-            println!("\t + Msg {} Write Latency {} ms", i, latency);
+            let payload          = payload.clone();
+            let arc_event_writer = Arc::clone(&shared_event_writer);
+
+            let handler = thread::spawn(move || {
+                let res = task::block_on( write_one_event(i, arc_event_writer, payload) );
+                res
+            });
+            handles.push(handler);
+            if i % conf.producer_rate == 0 {
+                thread::sleep(Duration::from_secs(1));
+            }
+        }
+
+        for handler in handles {
+            let latency = handler.join().unwrap();
             out.send(ChannelData::WriteLatency(latency)).unwrap();
         }
         let ben_ends = Utc::now();
