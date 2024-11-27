@@ -1,8 +1,12 @@
 use std::fs::File;
 use std::io::Write;
 use chrono::prelude::*;
+use serde::Serialize;
+use serde::Deserialize;
 use crate::config::Config;
-use serde::{Deserialize, Serialize};
+use statrs::statistics::Data;
+use std::collections::HashMap;
+use statrs::statistics::OrderStatistics;
 
 #[derive(Serialize, Deserialize)]
 pub struct TestResult {
@@ -18,9 +22,13 @@ pub struct TestResult {
     pub write_latency_75pct: f64,
     pub write_latency_95pct: f64,
     pub write_latency_99pct: f64,
+    pub write_latency_hist:  HashMap<u32, u32>,
+    pub read_latency_hist:   HashMap<u32, u32>,
+    pub throughput:          f64,
+    #[serde(skip_serializing)]
     pub write_latencies:     Vec<f64>,
-    pub read_latencies:      Vec<f64>,
-    pub throughput:          f64
+    #[serde(skip_serializing)]
+    pub read_latencies:      Vec<f64>
 }
 
 impl TestResult {
@@ -38,39 +46,36 @@ impl TestResult {
             write_latency_99pct: 0.0,
             write_latencies:     Vec::new(),
             read_latencies:      Vec::new(),
+            write_latency_hist:  HashMap::new(),
+            read_latency_hist:   HashMap::new(),
             throughput:          0.0
         }
     }
 
-    fn percentile(data: &Vec<f64>, percentile: f64) -> f64 {
-        let rank = percentile / 100.0 * (data.len() - 1) as f64;
-        let lower = rank.floor() as usize;
-        let upper = rank.ceil() as usize;
-        let weight = rank - lower as f64;
-    
-        if lower == upper {
-            data[lower]
-        } else {
-            data[lower] * (1.0 - weight) + data[upper] * weight
-        }
-    }
-
     pub fn calculate_metrics(&mut self) {
-        // Sort latencies
-        self.write_latencies.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        self.read_latencies.sort_by(|a, b| a.partial_cmp(b).unwrap());
         // Calculate latency percentiles
-        self.write_latency_50pct = Self::percentile(&self.write_latencies, 50.0);
-        self.write_latency_75pct = Self::percentile(&self.write_latencies, 75.0);
-        self.write_latency_95pct = Self::percentile(&self.write_latencies, 95.0);
-        self.write_latency_99pct = Self::percentile(&self.write_latencies, 99.0);
-
-        //self.write_latencies.clear();
-        //self.read_latencies.clear();
+        let mut data = Data::new(self.write_latencies.clone());
+        self.write_latency_50pct = data.percentile(50);
+        self.write_latency_75pct = data.percentile(75);
+        self.write_latency_95pct = data.percentile(95);
+        self.write_latency_99pct = data.percentile(99);
+        // Write Histogram
+        self.write_latencies.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        for &latency in &self.write_latencies {
+            *self.write_latency_hist.entry(latency as u32).or_insert(0) += 1;
+        }
+        self.write_latencies.clear();
+        // Read Histogram
+        self.read_latencies.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        for &latency in &self.read_latencies {
+            *self.read_latency_hist.entry(latency as u32).or_insert(0) += 1;
+        }
+        self.read_latencies.clear();
         /*
         Throughput = Total Output / Total Time
-        Total Output: total bits sent (messages sent x message size)
-        Total Time:   total duration in miliseconds
+            where:
+            Total Output = total bits sent (messages sent x message size)
+            Total Time   = total duration in miliseconds
         */
         let data_sent = self.message_num * self.message_size as u32;
         self.throughput = data_sent as f64 / self.duration;

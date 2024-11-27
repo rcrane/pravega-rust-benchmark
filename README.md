@@ -51,13 +51,12 @@ Metrics
 - **write_latency_75pct**: Write latency at 75%.
 - **write_latency_95pct**: Write latency at 95%.
 - **write_latency_99pct**: Write latency at 99%.
-- **write_latencies**: Vector with all write latencies.
-- **read_latencies**: Vector with all read latencies.
+- **write_latency_hist**: A histogram of the write latencies in u32 miliseconds.
+- **read_latency_hist**: A histogram of the read latencies in u32 miliseconds.
 - **throughput**: Throughput = Total Output Data / Total Time in Miliseconds.
 
 # To Do
 
-- Get historgram of latencies instead of all latencies.
 - Stress test.
 - Validate current metrics.
 - Evaluate possible metrics to add.

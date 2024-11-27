@@ -13,3 +13,4 @@ serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
 serde_json = "1.0"
 async-std = "1.10"
+statrs = "0.17.1"
