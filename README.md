@@ -1,6 +1,8 @@
 # Pravega Rust Benchmark
 
-Simple benchmark to measure the IO performance of Pravega systems using the Pravega Rust client.
+The Pravega Rust Benchmark is a simple benchmark Rust implementation for measuring IO performance of Pravega streaming systems. The general idea and usage is based on the OpenMessaging Benchmark which is implemented in Java, but for our experiment we cannot use it.
+
+One advantage of this tool is the configuration by message number instead of time. OpenMessaging Benchmark works by sending the possible messages at a configured time, which makes it more difficult to compare executions in the same environment.
 
 # Compile
 
@@ -22,11 +24,12 @@ To run the benchmark is necessary a set the configuration file (YAML format) as 
 
 | Parameter              | Description                              | Optional | Default |
 | ---------------------- | ---------------------------------------- | -------- | ------- |
-| name                   | Benchmark test name.                     | No       |         |
-| address                | Pravega IP address and Port.             | No       |         |
-| payload_file           | Path of the payload file (sending data). | No       |         |
-| message_num            | Number of messages to send.              | No       |         |
-| producer_rate          | Messages per second.                     | No       |         |
+| name                   | Benchmark test name.                     | No       | |
+| address                | Pravega IP address and Port.             | No       | |
+| payload_file           | Path of the payload file (sending data). | No       | |
+| message_num            | Number of messages to send.              | No       | |
+| message_warmup         | Number of messages to send for warmup.   | Yes      | 5 |
+| producer_rate          | Messages per second.                     | No       | |
 | scope                  | Pravega Scope.                           | Yes      | "scope" + timestamp |
 | stream                 | Pravega Stream.                          | Yes      | "stream" + timestamp |
 | retention_time         | Pravega retention time.                  | Yes      | 10 |
@@ -44,13 +47,16 @@ Data
 - **message_size**: Size in bits of the payload file.
 - **scope**: Generated or set in the configuration file scope.
 - **stream**: Generated or set in the configuration file stream.
-- **duration**: Total duration of the writing messages.
+- **duration**: Total duration of the writing messages in milliseconds.
+- **duration_min**: Total duration of the writing messages in minutes.
 
 Metrics
 - **write_latency_50pct**: Write latency at 50%.
 - **write_latency_75pct**: Write latency at 75%.
 - **write_latency_95pct**: Write latency at 95%.
 - **write_latency_99pct**: Write latency at 99%.
+- **write_latency_avg**: Mean or average write latency.
+- **write_latency_max**: Max write latency.
 - **write_latency_hist**: A histogram of the write latencies in u32 miliseconds.
 - **read_latency_hist**: A histogram of the read latencies in u32 miliseconds.
 - **throughput**: Throughput = Total Output Data / Total Time in Miliseconds.
@@ -59,4 +65,5 @@ Metrics
 
 - Stress test.
 - Validate current metrics.
-- Evaluate possible metrics to add.
+- Evaluate possible new metrics.
+- Latency Histograms in float64 (now it is in u32).

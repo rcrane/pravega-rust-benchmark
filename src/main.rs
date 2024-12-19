@@ -120,7 +120,7 @@ fn get_stream_config(conf: Config, scope: Scope) -> StreamConfiguration {
     stream_config
 }
 
-async fn write_one_event(i: u32, arc_event_writer: Arc<Mutex<EventWriter>>, payload: Vec<u8>) -> f64 {
+async fn write_one_event(arc_event_writer: Arc<Mutex<EventWriter>>, payload: Vec<u8>) -> f64 {
     let mut event_writer = arc_event_writer.lock().unwrap();
     let start_time = Utc::now();
     let result = event_writer.write_event(payload).await;
@@ -128,7 +128,6 @@ async fn write_one_event(i: u32, arc_event_writer: Arc<Mutex<EventWriter>>, payl
     let end_time = Utc::now();
 
     let latency = get_difference(start_time, end_time);
-    println!("\t + Msg {} Write Latency {} ms", i, latency);
     latency
 }
 
@@ -145,7 +144,7 @@ fn sender_handler(signal: mpsc::Sender<i32>, out: mpsc::Sender<ChannelData>, con
         controller_client.create_scope(&scope)
             .await
             .expect("create scope");
-        println!("\t scope {} created", conf.scope);
+        println!("\t Scope {} created", conf.scope);
 
         // create a stream containing only one segment
         let stream_config = get_stream_config(conf.clone(), scope.clone());
@@ -153,41 +152,57 @@ fn sender_handler(signal: mpsc::Sender<i32>, out: mpsc::Sender<ChannelData>, con
             .create_stream(&stream_config)
             .await
             .expect("create stream");
-        println!("\t stream {} created", conf.stream);
+        println!("\t Stream {} created", conf.stream);
 
         println!("Starting WarmUp");
         let scoped_stream = get_scoped_stream(conf.scope, conf.stream);
         let event_writer = client_factory.create_event_writer(scoped_stream);
         let shared_event_writer = Arc::new(Mutex::new(event_writer));
 
-        let arc_event_writer = Arc::clone(&shared_event_writer);
         for i in 1..=WARMUP_MESSAGES {
-            let mut event_writer = arc_event_writer.lock().unwrap();
-            let result = event_writer.write_event(payload.clone()).await;
-            assert!(result.await.is_ok());
-            println!("\t + Send Msg {}", i);
-        }
-
-        println!("Starting Benchmark");
-        signal.send(START_CONSTANT).unwrap();
-        
-        let mut handles = Vec::with_capacity(conf.message_num as usize);
-        
-        let ben_start = Utc::now();
-        for i in 1..=conf.message_num {
             let payload          = payload.clone();
             let arc_event_writer = Arc::clone(&shared_event_writer);
-
-            let handler = thread::spawn(move || {
-                let res = task::block_on( write_one_event(i, arc_event_writer, payload) );
-                res
-            });
-            handles.push(handler);
+            write_one_event(arc_event_writer, payload).await;
             if i % conf.producer_rate == 0 {
                 thread::sleep(Duration::from_secs(1));
             }
         }
 
+        println!("Starting Benchmark");
+        signal.send(START_CONSTANT).unwrap();
+        
+        /*
+         * Create a thread for each message to send, and when the created threads are
+         * equal to produce rate wait for a second. This ensure the produce rate per second
+         * requirement.
+         */
+        let mut handles = Vec::with_capacity(conf.message_num as usize);
+        let ben_start   = Utc::now();
+        let mut thread1 = Utc::now();
+        for i in 1..=conf.message_num {
+            let payload          = payload.clone();
+            let arc_event_writer = Arc::clone(&shared_event_writer);
+
+            let handler = thread::spawn(move || {
+                let res = task::block_on( write_one_event(arc_event_writer, payload) );
+                res
+            });
+            handles.push(handler);
+            if i % conf.producer_rate == 0 {
+                let thread2 = Utc::now();
+                println!("\t + Messages Sent {}", i);
+                /* 
+                 * Wait for 1 second to fullfil the producer rate per second, but remove 
+                 * the time that takes to create the threads (thread1 - thread2 in milliseconds).
+                 */
+                let wait = 1000 - get_difference(thread1, thread2) as u64;
+                thread::sleep(Duration::from_millis(wait));
+                thread1 = Utc::now();
+            }
+        }
+        println!("\t + Messages Sent {}", conf.message_num);
+
+        // Wait for the threads to finish and calculate the total time for benchmark sending.
         for handler in handles {
             let latency = handler.join().unwrap();
             out.send(ChannelData::WriteLatency(latency)).unwrap();
@@ -230,9 +245,11 @@ fn receiver_handler(signal: mpsc::Receiver<i32>, out: mpsc::Sender<ChannelData>,
                     let latency = get_difference(time1, time2);
                     let event_len = read_event.unwrap().value.as_slice().len();
                     assert_eq!(event_len, conf.message_size);
-                    println!("\t - Msg {} Len {} Read Latency {} ms", i, event_len, latency);
                     if i > WARMUP_MESSAGES {
                         out.send(ChannelData::ReadLatency(latency)).unwrap();
+                    }
+                    if i % conf.producer_rate == 0 {
+                        println!("\t - Messages Read {}", i);
                     }
                 } else {
                     reader.release_segment(slice).await.unwrap();
