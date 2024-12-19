@@ -136,7 +136,7 @@ fn sender_handler(signal: mpsc::Sender<i32>, out: mpsc::Sender<ChannelData>, con
     let payload = conf.message.to_string().into_bytes();
     let client_factory = create_client(conf.address.clone());
     
-    println!("Init Environtment");
+    println!("Init Environment");
     client_factory.runtime().block_on(async {
         let controller_client = client_factory.controller_client();
         // create a scope
@@ -189,14 +189,19 @@ fn sender_handler(signal: mpsc::Sender<i32>, out: mpsc::Sender<ChannelData>, con
             });
             handles.push(handler);
             if i % conf.producer_rate == 0 {
-                let thread2 = Utc::now();
                 println!("\t + Messages Sent {}", i);
+                let thread2 = Utc::now();
                 /* 
                  * Wait for 1 second to fullfil the producer rate per second, but remove 
                  * the time that takes to create the threads (thread1 - thread2 in milliseconds).
                  */
-                let wait = 1000 - get_difference(thread1, thread2) as u64;
-                thread::sleep(Duration::from_millis(wait));
+                let diff = get_difference(thread1, thread2) as u64;
+                if diff >= 1000 {
+                    thread::sleep(Duration::from_millis(5));
+                } else {
+                    let wait = 1000 - diff;
+                    thread::sleep(Duration::from_millis(wait));
+                }
                 thread1 = Utc::now();
             }
         }
