@@ -66,6 +66,15 @@ impl TestResult {
     }
 
     pub fn calculate_metrics(&mut self) {
+        // Remove write failures
+        let latencies = self.write_latencies.clone();
+        self.write_latencies.clear();
+        for &latency in &latencies {
+            if latency > 0.0 {
+                self.write_latencies.push(latency);
+            }
+        }
+        self.message_num = self.write_latencies.len() as u32;
         // Calculate latency percentiles
         let mut data = Data::new(self.write_latencies.clone());
         self.write_latency_50pct = Self::round3(data.percentile(50));

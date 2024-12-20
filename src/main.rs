@@ -15,6 +15,7 @@ use chrono::DateTime;
 use result::TestResult;
 use std::time::Duration;
 use chrono::prelude::Utc;
+use threadpool::ThreadPool;
 use channel_data::ChannelData;
 use pravega_client_shared::Scope;
 use pravega_client_shared::Stream;
@@ -120,13 +121,16 @@ fn get_stream_config(conf: Config, scope: Scope) -> StreamConfiguration {
     stream_config
 }
 
-async fn write_one_event(arc_event_writer: Arc<Mutex<EventWriter>>, payload: Vec<u8>) -> f64 {
-    let mut event_writer = arc_event_writer.lock().unwrap();
+async fn write_one_event(i: u32, arc_event_writer: Arc<Mutex<EventWriter>>, payload: Vec<u8>) -> f64 {
+    let mut event_writer = arc_event_writer.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let start_time = Utc::now();
     let result = event_writer.write_event(payload).await;
-    assert!(result.await.is_ok());
-    let end_time = Utc::now();
+    if !result.await.is_ok() {
+        println!("Error at writting {}", i);
+        return -1.0
+    }
 
+    let end_time = Utc::now();
     let latency = get_difference(start_time, end_time);
     latency
 }
@@ -162,7 +166,7 @@ fn sender_handler(signal: mpsc::Sender<i32>, out: mpsc::Sender<ChannelData>, con
         for i in 1..=WARMUP_MESSAGES {
             let payload          = payload.clone();
             let arc_event_writer = Arc::clone(&shared_event_writer);
-            write_one_event(arc_event_writer, payload).await;
+            write_one_event(i, arc_event_writer, payload).await;
             if i % conf.producer_rate == 0 {
                 thread::sleep(Duration::from_secs(1));
             }
@@ -176,42 +180,27 @@ fn sender_handler(signal: mpsc::Sender<i32>, out: mpsc::Sender<ChannelData>, con
          * equal to produce rate wait for a second. This ensure the produce rate per second
          * requirement.
          */
-        let mut handles = Vec::with_capacity(conf.message_num as usize);
-        let ben_start   = Utc::now();
-        let mut thread1 = Utc::now();
+        let pool      = ThreadPool::new(conf.producer_rate as usize);
+        let ben_start = Utc::now();
         for i in 1..=conf.message_num {
-            let payload          = payload.clone();
+            let out_cloned       = out.clone();
+            let payload_cloned   = payload.clone();
             let arc_event_writer = Arc::clone(&shared_event_writer);
-
-            let handler = thread::spawn(move || {
-                let res = task::block_on( write_one_event(arc_event_writer, payload) );
-                res
+            pool.execute(move || {
+                let result = task::block_on( write_one_event(i, arc_event_writer, payload_cloned) );
+                out_cloned.send(ChannelData::WriteLatency(result)).unwrap();
             });
-            handles.push(handler);
             if i % conf.producer_rate == 0 {
                 println!("\t + Messages Sent {}", i);
-                let thread2 = Utc::now();
-                /* 
-                 * Wait for 1 second to fullfil the producer rate per second, but remove 
-                 * the time that takes to create the threads (thread1 - thread2 in milliseconds).
-                 */
-                let diff = get_difference(thread1, thread2) as u64;
-                if diff >= 1000 {
-                    thread::sleep(Duration::from_millis(5));
-                } else {
-                    let wait = 1000 - diff;
-                    thread::sleep(Duration::from_millis(wait));
-                }
-                thread1 = Utc::now();
+                thread::sleep(Duration::from_secs(1));
             }
         }
-        println!("\t + Messages Sent {}", conf.message_num);
+        if conf.message_num % conf.producer_rate != 0 {
+            println!("\t + Messages Sent {}", conf.message_num);
+            thread::sleep(Duration::from_secs(1));
+        }
 
         // Wait for the threads to finish and calculate the total time for benchmark sending.
-        for handler in handles {
-            let latency = handler.join().unwrap();
-            out.send(ChannelData::WriteLatency(latency)).unwrap();
-        }
         let ben_ends = Utc::now();
         let duration = get_difference(ben_start, ben_ends);
         out.send(ChannelData::WriteDuration(duration)).unwrap();
