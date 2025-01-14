@@ -1,7 +1,7 @@
 # Workload configuration file
 name: CONFIG_EXAMPLE
 address: "localhost:9090"
-payload_file: "payload/payload-100b.data"
-message_num: 500
-producer_rate: 100
-message_warmup: 5
+payload_file: "payload/calgary/book1"
+message_num: 50
+producer_rate: 10
+message_warmup: 10

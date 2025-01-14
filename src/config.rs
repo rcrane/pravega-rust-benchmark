@@ -26,8 +26,7 @@ pub struct Config {
     pub name:                   String,
     pub address:                String,
     pub payload_file:           String,
-    pub message:                String,
-    pub message_size:           usize,
+    pub message_size:           u64,
     pub message_num:            u32,
     pub message_warmup:         u32,
     pub scope:                  String,
@@ -45,7 +44,6 @@ impl Config {
             name:                   "".to_string(),
             address:                "".to_string(),
             payload_file:           "".to_string(),
-            message:                "".to_string(),
             message_size:           0,
             message_num:            0,
             message_warmup:         5,
@@ -68,8 +66,7 @@ impl Config {
         conf.address       = conf_yaml.address;
         conf.payload_file  = conf_yaml.payload_file;
         conf.message_num   = conf_yaml.message_num;
-        conf.message       = Self::get_payload(conf.payload_file.clone()).expect("Failed to read the payload file.");
-        conf.message_size  = conf.message.len();
+        conf.message_size  = Self::get_payload_len(conf.payload_file.clone());
         conf.producer_rate = conf_yaml.producer_rate;
         
         if conf_yaml.scope == None {
@@ -113,5 +110,15 @@ impl Config {
         
         file.read_to_string(&mut content)?;
         Ok(content)
+    }
+
+    fn get_payload_len(file_path: String) -> u64 {
+        let metadata = std::fs::metadata(file_path);
+        metadata.expect("Error at getting file length").len()
+    }
+
+    pub fn get_payload_bytes(&self) -> Vec<u8> {
+        let message = Self::get_payload( self.payload_file.clone() ).expect("Failed to read the payload file.");
+        message.to_string().into_bytes()
     }
 }

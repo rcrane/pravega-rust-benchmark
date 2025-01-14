@@ -29,7 +29,7 @@ use pravega_client_shared::StreamConfiguration;
 use pravega_client_config::ClientConfigBuilder;
 use pravega_client::client_factory::ClientFactory;
 
-const START_CONSTANT:  i32 = 95;
+const START_CONSTANT: i32 = 95;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Getting the workload file configuration form command line parameters
@@ -71,7 +71,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     result.calculate_metrics();
     result.to_file().expect("Failed to write results.");
-    println!("Benchmark finished");
     Ok(())
 }
 
@@ -134,10 +133,16 @@ async fn write_one_event(arc_event_writer: Arc<Mutex<EventWriter>>, payload: Vec
 }
 
 fn sender_handler(signal: mpsc::Sender<i32>, out: mpsc::Sender<ChannelData>, conf: Config) {
-    println!("Connecting to Pravega {}", conf.address);
-    let payload = conf.message.to_string().into_bytes();
+    //let payload = conf.message.to_string().into_bytes();
+    let payload = conf.get_payload_bytes();
     let client_factory = create_client(conf.address.clone());
-    
+
+    println!("Configuration {}", conf.name);
+    println!("\t Pravega       {}", conf.address);
+    println!("\t WarmUp        {}", conf.message_warmup);
+    println!("\t Payload File  {}", conf.payload_file);
+    println!("\t Messages      {}", conf.message_num);
+    println!("\t Producer Rate {}", conf.producer_rate);
     println!("Init Environment");
     client_factory.runtime().block_on(async {
         let controller_client = client_factory.controller_client();
@@ -156,7 +161,7 @@ fn sender_handler(signal: mpsc::Sender<i32>, out: mpsc::Sender<ChannelData>, con
             .expect("create stream");
         println!("\t Stream {} created", conf.stream);
 
-        println!("Starting WarmUp");
+        println!("Starting WarmUp {} messages", conf.message_warmup);
         let scoped_stream = get_scoped_stream(conf.scope, conf.stream);
         let event_writer = client_factory.create_event_writer(scoped_stream);
         let shared_event_writer = Arc::new(Mutex::new(event_writer));
@@ -169,7 +174,7 @@ fn sender_handler(signal: mpsc::Sender<i32>, out: mpsc::Sender<ChannelData>, con
                 thread::sleep(Duration::from_secs(1));
             }
         }
-
+        
         println!("Starting Benchmark");
         signal.send(START_CONSTANT).unwrap();
         
@@ -217,7 +222,7 @@ fn receiver_handler(signal: mpsc::Receiver<i32>, out: mpsc::Sender<ChannelData>,
         thread::sleep(Duration::from_millis(10));
     }
     // Start Reading Messages
-    let mut i = 0;
+    let mut i = (conf.message_warmup as i32) * (-1);
     let scoped_stream = get_scoped_stream(conf.scope, conf.stream);
     client_factory.runtime().block_on(async {
         let rg = client_factory.create_reader_group("rg".to_string(), scoped_stream).await;
@@ -231,17 +236,21 @@ fn receiver_handler(signal: mpsc::Receiver<i32>, out: mpsc::Sender<ChannelData>,
             loop {
                 let time1 = Utc::now();
                 let read_event = slice.next();
-                let time2 = Utc::now();
                 if read_event.is_some() {
                     i += 1;
-                    let latency = get_difference(time1, time2);
-                    let event_len = read_event.unwrap().value.as_slice().len();
-                    assert_eq!(event_len, conf.message_size);
-                    if i > conf.message_warmup {
-                        out.send(ChannelData::ReadLatency(latency)).unwrap();
+                    let event_len = read_event.unwrap().value.as_slice().len() as u64;
+                    let time2     = Utc::now();
+                    let latency   = get_difference(time1, time2);
+                    
+                    if event_len != conf.message_size {
+                        println!("\t - Error at reading: expected {} got {}", conf.message_size, event_len);
+                        continue;
                     }
-                    if i % conf.producer_rate == 0 {
-                        println!("\t - Messages Read {}", i);
+                    if i > 0 {
+                        out.send(ChannelData::ReadLatency(latency)).unwrap();
+                        if i % (conf.producer_rate as i32) == 0 {
+                            println!("\t - Messages Read {}", i);
+                        }
                     }
                 } else {
                     reader.release_segment(slice).await.unwrap();

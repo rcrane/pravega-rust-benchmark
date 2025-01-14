@@ -15,7 +15,7 @@ pub struct TestResult {
     // Test Configuration
     pub name:         String,
     pub message_num:  u32,
-    pub message_size: usize,
+    pub message_size: u64,
     pub scope:        String,
     pub stream:       String,
     pub duration:     f64,
