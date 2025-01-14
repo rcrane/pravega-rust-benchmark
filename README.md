@@ -67,3 +67,8 @@ Metrics
 - Validate current metrics.
 - Evaluate possible new metrics.
 - Latency Histograms in float64 (now it is in u32).
+
+# To Do (beyond Neardata)
+
+- Make it vendor-neutral benchmarking (Kafka, Pulsar, etc.).
+- Add the option to run multiple workers.

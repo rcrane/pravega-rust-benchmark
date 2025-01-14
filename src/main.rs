@@ -30,7 +30,6 @@ use pravega_client_config::ClientConfigBuilder;
 use pravega_client::client_factory::ClientFactory;
 
 const START_CONSTANT:  i32 = 95;
-const WARMUP_MESSAGES: u32 = 5;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Getting the workload file configuration form command line parameters
@@ -162,7 +161,7 @@ fn sender_handler(signal: mpsc::Sender<i32>, out: mpsc::Sender<ChannelData>, con
         let event_writer = client_factory.create_event_writer(scoped_stream);
         let shared_event_writer = Arc::new(Mutex::new(event_writer));
 
-        for i in 1..=WARMUP_MESSAGES {
+        for i in 1..=conf.message_warmup {
             let payload          = payload.clone();
             let arc_event_writer = Arc::clone(&shared_event_writer);
             write_one_event(arc_event_writer, payload).await;
@@ -238,7 +237,7 @@ fn receiver_handler(signal: mpsc::Receiver<i32>, out: mpsc::Sender<ChannelData>,
                     let latency = get_difference(time1, time2);
                     let event_len = read_event.unwrap().value.as_slice().len();
                     assert_eq!(event_len, conf.message_size);
-                    if i > WARMUP_MESSAGES {
+                    if i > conf.message_warmup {
                         out.send(ChannelData::ReadLatency(latency)).unwrap();
                     }
                     if i % conf.producer_rate == 0 {

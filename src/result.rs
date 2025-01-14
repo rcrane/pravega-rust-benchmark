@@ -19,7 +19,6 @@ pub struct TestResult {
     pub scope:        String,
     pub stream:       String,
     pub duration:     f64,
-    pub duration_min: f64,
     // Metrics
     pub write_latency_50pct: f64,
     pub write_latency_75pct: f64,
@@ -30,6 +29,7 @@ pub struct TestResult {
     pub write_latency_hist:  HashMap<u32, u32>,
     pub read_latency_hist:   HashMap<u32, u32>,
     pub throughput:          f64,
+    pub sent_data:           f64,
     #[serde(skip_serializing)]
     pub write_latencies:     Vec<f64>,
     #[serde(skip_serializing)]
@@ -45,7 +45,6 @@ impl TestResult {
             scope:               conf.scope,
             stream:              conf.stream,
             duration:            0.0,
-            duration_min:        0.0,
             write_latency_50pct: 0.0,
             write_latency_75pct: 0.0,
             write_latency_95pct: 0.0,
@@ -56,7 +55,8 @@ impl TestResult {
             read_latencies:      Vec::new(),
             write_latency_hist:  HashMap::new(),
             read_latency_hist:   HashMap::new(),
-            throughput:          0.0
+            throughput:          0.0,
+            sent_data:           0.0
         }
     }
 
@@ -94,14 +94,14 @@ impl TestResult {
             *self.read_latency_hist.entry(latency as u32).or_insert(0) += 1;
         }
         /*
-         * Throughput = Total Output / Total Time
+         * Throughput = Total Output / Total Time (MB/s)
          * where:
-         *   Total Output = total bits sent (messages sent x message size)
-         *   Total Time   = total duration in miliseconds
+         *   Total Output = total MB sent
+         *   Total Time   = total duration in seconds
          */
-        let data_sent     = self.message_num * self.message_size as u32;
-        self.throughput   = data_sent as f64 / self.duration;
-        self.duration_min = Self::round3(self.duration / 60000.0);
+        self.duration   = self.duration / 1000.0;
+        self.sent_data  = (self.message_num * self.message_size as u32) as f64 / 1000000.0;
+        self.throughput = self.sent_data / self.duration;
     }
 
     pub fn to_file(&self) -> std::io::Result<()> {
@@ -111,8 +111,10 @@ impl TestResult {
         let name = format!("result_{}.json", formatted_date);
         // Create file and write results
         let json = serde_json::to_string(&self).unwrap();
-        let mut file = File::create(name)?;
+        let mut file = File::create(name.clone())?;
         file.write_all(json.as_bytes())?;
+
+        println!("Results writen in {}", name);
         Ok(())
     }
 }
