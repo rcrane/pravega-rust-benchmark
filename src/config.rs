@@ -1,4 +1,4 @@
-use std::io;
+//use std::io;
 use std::io::Read;
 use std::fs::File;
 use serde_yaml::{self};
@@ -104,21 +104,28 @@ impl Config {
         name
     }
     
-    fn get_payload(path: String) -> Result<String, io::Error> {
+    /*fn get_payload(path: String) -> Result<String, io::Error> {
         let mut file = File::open(path)?;
         let mut content = String::new();
         
         file.read_to_string(&mut content)?;
         Ok(content)
-    }
+    }*/
 
     fn get_payload_len(file_path: String) -> u64 {
         let metadata = std::fs::metadata(file_path);
         metadata.expect("Error at getting file length").len()
     }
 
-    pub fn get_payload_bytes(&self) -> Vec<u8> {
+    /*pub fn get_payload_bytes(&self) -> Vec<u8> {
         let message = Self::get_payload( self.payload_file.clone() ).expect("Failed to read the payload file.");
         message.to_string().into_bytes()
+    }*/
+
+    pub fn get_payload(&self) -> Vec<u8> {
+        let file       = File::open( self.payload_file.clone() );
+        let mut buffer = Vec::new();
+        let _          = file.expect("Error at reading payload").read_to_end(&mut buffer);
+        buffer
     }
 }

@@ -47,8 +47,7 @@ Data
 - **message_size**: Size in bits of the payload file.
 - **scope**: Generated or set in the configuration file scope.
 - **stream**: Generated or set in the configuration file stream.
-- **duration**: Total duration of the writing messages in milliseconds.
-- **duration_min**: Total duration of the writing messages in minutes.
+- **duration**: Total duration of the writing messages in seconds.
 
 Metrics
 - **write_latency_50pct**: Write latency at 50%.
@@ -59,7 +58,7 @@ Metrics
 - **write_latency_max**: Max write latency.
 - **write_latency_hist**: A histogram of the write latencies in u32 miliseconds.
 - **read_latency_hist**: A histogram of the read latencies in u32 miliseconds.
-- **throughput**: Throughput = Total Output Data / Total Time in Miliseconds.
+- **throughput**: Throughput = Total Output Data / Total Time (MB/s).
 
 # To Do
 

@@ -134,7 +134,7 @@ async fn write_one_event(arc_event_writer: Arc<Mutex<EventWriter>>, payload: Vec
 
 fn sender_handler(signal: mpsc::Sender<i32>, out: mpsc::Sender<ChannelData>, conf: Config) {
     //let payload = conf.message.to_string().into_bytes();
-    let payload = conf.get_payload_bytes();
+    let payload = conf.get_payload();
     let client_factory = create_client(conf.address.clone());
 
     println!("Configuration {}", conf.name);
