@@ -1,0 +1,269 @@
+.pn 0
+.ls1
+.EQ
+delim $$
+.EN
+.ev1
+.ps-2
+.vs-2
+.ev
+\&
+.sp 5
+.ps+4
+.ce
+ARITHMETIC CODING FOR DATA COMPRESSION
+.ps-4
+.sp4
+.ce
+Ian H. Witten, Radford M. Neal, and John G. Cleary
+.sp2
+.ce4
+Department of Computer Science
+The University of Calgary
+2500 University Drive NW
+Calgary, Canada T2N 1N4
+.sp2
+.ce
+August, 1986, revised January 1987
+.sp 8
+.in+1i
+.ll-1i
+The state of the art in data compression is arithmetic coding, not
+the better-known Huffman method.
+Arithmetic coding gives greater compression, is faster for adaptive models,
+and clearly separates the model from the channel encoding.
+This paper presents a practical implementation of the technique.
+.sp 3
+.in +0.5i
+.ti -0.5i
+\fICR Categories and subject descriptors:\fR
+.br
+E.4 [DATA] Coding and Information Theory \(em Data Compaction and Compression
+.br
+H.1.1 [Models and Principles] Systems and Information Theory \(em Information Theory
+.sp
+.ti -0.5i
+\fIGeneral terms:\fR  algorithms, performance
+.sp
+.ti -0.5i
+\fIAdditional key words and phrases:\fR  arithmetic coding, Huffman coding, adaptive modeling
+.ll+1i
+.in 0
+.bp
+.sh "Introduction"
+.pp
+Arithmetic coding is superior in most respects to the better-known Huffman
+(1952) method.
+.[
+Huffman 1952 method construction minimum-redundancy codes
+.]
+It represents information at least as compactly, sometimes considerably more
+so.
+Its performance is optimal without the need for blocking of input data.
+It encourages a clear separation between the model for representing data and
+the encoding of information with respect to that model.
+It accommodates adaptive models easily.
+It is computationally efficient.
+Yet many authors and practitioners seem unaware of the technique.
+Indeed there is a widespread belief that Huffman coding cannot be improved
+upon.
+.pp
+This paper aims to rectify the situation by presenting an accessible
+implementation of arithmetic coding, and detailing its performance
+characteristics.
+The next section briefly reviews basic concepts of data compression and
+introduces the model-based approach which underlies most modern techniques.
+We then outline the idea of arithmetic coding using a simple example.
+Following that programs are presented for both encoding and decoding, in which
+the model occupies a separate module so that different ones can easily be
+used.
+Next we discuss the construction of fixed and adaptive models.
+The subsequent section details the compression efficiency and execution time
+of the programs, including the effect of different arithmetic word lengths on
+compression efficiency.
+Finally, we outline a few applications where arithmetic coding is appropriate.
+.sh "Data compression"
+.pp
+To many, data compression conjures up an assortment of \fIad hoc\fR
+techniques such as converting spaces in text to tabs, creating special codes
+for common words, or run-length coding of picture data (eg see Held, 1984).
+.[
+Held 1984 data compression techniques applications
+.]
+This contrasts with the more modern model-based paradigm for
+coding, where from an \fIinput string\fR of symbols and a \fImodel\fR, an
+\fIencoded string\fR is produced which is (usually) a compressed version of
+the input.
+The decoder, which must have access to the same model,
+regenerates the exact input string from the encoded string.
+Input symbols are drawn from some well-defined set such as the ASCII or
+binary alphabets;
+the encoded string is a plain sequence of bits.
+The model is a way of calculating, in any given context, the distribution of
+probabilities for the next input symbol.
+It must be possible for the decoder to produce exactly the same probability
+distribution in the same context.
+Compression is achieved by transmitting the more probable symbols in fewer
+bits than the less probable ones.
+.pp
+For example, the model may assign a predetermined probability to each symbol
+in the ASCII alphabet.
+No context is involved.
+These probabilities may be determined by counting frequencies in
+representative samples of text to be transmitted.
+Such a \fIfixed\fR model is communicated in advance to both encoder and
+decoder, after which it is used for many messages.
+.pp
+Alternatively, the probabilities the model assigns may change as each symbol
+is transmitted, based on the symbol frequencies seen \fIso far\fR in this
+message.
+This is an \fIadaptive\fR model.
+There is no need for a representative sample of text, because each message
+is treated as an independent unit, starting from scratch.
+The encoder's model changes with each symbol transmitted, and the decoder's
+changes with each symbol received, in sympathy.
+.pp
+More complex models can provide more accurate probabilistic predictions and
+hence achieve greater compression.
+For example, several characters of previous context could condition the
+next-symbol probability.
+Such methods have enabled mixed-case English text to be encoded in around
+2.2\ bit/char with two quite different kinds of model.
+(Cleary & Witten, 1984b; Cormack & Horspool, 1985).
+.[
+Cleary Witten 1984 data compression
+%D 1984b
+.]
+.[
+Cormack Horspool 1985 dynamic Markov
+%O April
+.]
+Techniques which do not separate modeling from coding so distinctly, like
+that of Ziv & Lempel (1978), do not seem to show such great potential for
+compression, although they may be appropriate when the aim is raw speed rather
+than compression performance (Welch, 1984).
+.[
+Ziv Lempel 1978 compression of individual sequences
+.]
+.[
+Welch 1984 data compression
+.]
+.pp
+The effectiveness of any model can be measured by the \fIentropy\fR of the
+message with respect to it, usually expressed in bits/symbol.
+Shannon's fundamental theorem of coding states that given messages randomly
+generated from a model, it is impossible to encode them into less bits
+(on average) than the entropy of that model (Shannon & Weaver, 1949).
+.[
+Shannon Weaver 1949
+.]
+.pp
+A message can be coded with respect to a model using either Huffman or
+arithmetic coding.
+The former method is frequently advocated as the best possible technique for
+reducing the encoded data rate.
+But it is not.
+Given that each symbol in the alphabet must translate into an integral number
+of bits in the encoding, Huffman coding indeed achieves ``minimum
+redundancy''.
+In other words, it performs optimally if all symbol probabilities are
+integral powers of 1/2.
+But this is not normally the case in practice;
+indeed, Huffman coding can take up to one extra bit per symbol.
+The worst case is realized by a source in which one symbol has probability
+approaching unity.
+Symbols emanating from such a source convey negligible information on average,
+but require at least one bit to transmit (Gallagher, 1978).
+.[
+Gallagher 1978 variations on a theme by Huffman
+.]
+Arithmetic coding dispenses with the restriction that each symbol translates
+into an integral number of bits, thereby coding more efficiently.
+It actually achieves the theoretical entropy bound to compression efficiency
+for any source, including the one just mentioned.
+.pp
+In general, sophisticated models expose the deficiencies of Huffman coding
+more starkly than simple ones.
+This is because they more often predict symbols with probabilities close to
+one, the worst case for Huffman coding.
+For example, the techniques mentioned above which code English text in
+2.2\ bit/char both use arithmetic coding as the final step, and performance
+would be impacted severely if Huffman coding were substituted.
+Nevertheless, since our topic is coding and not modeling, the illustrations in
+this paper all employ simple models.
+Even then, as we shall see, Huffman coding is inferior to arithmetic coding.
+.pp
+The basic concept of arithmetic coding can be traced back to Elias in the
+early 1960s (see Abramson, 1963, pp 61-62).
+.[
+Abramson 1963
+.]
+Practical techniques were first introduced by Rissanen (1976) and
+Pasco (1976), and developed further in Rissanen (1979).
+.[
+Rissanen 1976 Generalized Kraft Inequality
+.]
+.[
+Pasco 1976
+.]
+.[
+Rissanen 1979 number representations
+.]
+.[
+Langdon 1981 tutorial arithmetic coding
+.]
+Details of the implementation presented here have not appeared in the
+literature before; Rubin (1979) is closest to our approach.
+.[
+Rubin 1979 arithmetic stream coding
+.]
+The reader interested in the broader class of arithmetic codes is referred
+to Rissanen & Langdon (1979);
+.[
+Rissanen Langdon 1979 Arithmetic coding
+.]
+a tutorial is available in Langdon (1981).
+.[
+Langdon 1981 tutorial arithmetic coding
+.]
+Despite these publications, the method is not widely known.
+A number of recent books and papers on data compression mention it only in
+passing, or not at all.
+.sh "The idea of arithmetic coding"
+.pp
+In arithmetic coding a message is represented by an
+interval of real numbers between 0 and 1.
+As the message becomes longer, the interval needed to represent it becomes
+smaller, and the number of bits needed to specify that interval grows.
+Successive symbols of the message reduce the size of the
+interval in accordance with the symbol probabilities generated by the
+model.
+The more likely symbols reduce the range by less than the unlikely symbols,
+and hence add fewer bits to the message.
+.pp
+Before anything is transmitted, the range for the message is the entire
+interval [0,\ 1)\(dg.
+.FN
+\(dg [0,\ 1) denotes the half-open interval 0\(<=\fIx\fR<1.
+.EF
+As each symbol is processed, the range is narrowed to that portion of it
+allocated to the symbol.
+For example, suppose the alphabet is {\fIa,\ e,\ i,\ o,\ u,\ !\fR}, and a
+fixed model is used with probabilities shown in Table\ 1.
+Imagine transmitting the message \fIeaii!\fR.
+Initially, both encoder and decoder know that the range is [0,\ 1).
+After seeing the first symbol, \fIe\fR, the encoder narrows it to
+[0.2,\ 0.5), the range the model allocates to this symbol.
+The second symbol, \fIa\fR, will narrow this new range to the first 1/5 of it,
+since \fIa\fR has been allocated [0,\ 0.2).
+This produces [0.2,\ 0.26) since the previous range was 0.3 units long and
+1/5 of that is 0.06.
+The next symbol, \fIi\fR, is allocated [0.5,\ 0.6), which when applied to
+[0.2,\ 0.26) gives the smaller range [0.23,\ 0.236).
+Proceeding in this way, the encoded message builds up as follows:
+.LB
+.nf
+.ta \w'after seeing   'u +0.5i +\w'[0.23354, 'u
+initially		[0,	1)
+after seeing	\fIe\fR	[0.2,	0.5)
+	

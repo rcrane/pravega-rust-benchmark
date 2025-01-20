@@ -138,7 +138,7 @@ fn sender_handler(signal: mpsc::Sender<i32>, out: mpsc::Sender<ChannelData>, con
     let client_factory = create_client(conf.address.clone());
 
     println!("Configuration {}", conf.name);
-    println!("\t Pravega       {}", conf.address);
+    println!("\t EndPoint      {}", conf.address);
     println!("\t WarmUp        {}", conf.message_warmup);
     println!("\t Payload File  {}", conf.payload_file);
     println!("\t Messages      {}", conf.message_num);
@@ -257,8 +257,7 @@ fn receiver_handler(signal: mpsc::Receiver<i32>, out: mpsc::Sender<ChannelData>,
                     if let Some(new_slice) = reader
                         .acquire_segment()
                         .await
-                        .expect("Failed to acquire segment since the reader is offline")
-                    {
+                        .expect("Failed to acquire segment since the reader is offline") {
                         slice = new_slice;
                     } else {
                         println!("\t - No more data to read");
