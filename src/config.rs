@@ -103,24 +103,11 @@ impl Config {
         let name = init.to_owned() + &now.timestamp().to_string();
         name
     }
-    
-    /*fn get_payload(path: String) -> Result<String, io::Error> {
-        let mut file = File::open(path)?;
-        let mut content = String::new();
-        
-        file.read_to_string(&mut content)?;
-        Ok(content)
-    }*/
 
     fn get_payload_len(file_path: String) -> u64 {
         let metadata = std::fs::metadata(file_path);
         metadata.expect("Error at getting file length").len()
     }
-
-    /*pub fn get_payload_bytes(&self) -> Vec<u8> {
-        let message = Self::get_payload( self.payload_file.clone() ).expect("Failed to read the payload file.");
-        message.to_string().into_bytes()
-    }*/
 
     pub fn get_payload(&self) -> Vec<u8> {
         let file       = File::open( self.payload_file.clone() );
