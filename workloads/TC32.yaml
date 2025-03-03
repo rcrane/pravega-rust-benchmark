@@ -1,0 +1,6 @@
+payload_file: "payload/payload-250Kb.data"
+name: Simple_Benchmark
+address: "localhost:9090"
+message_num: 30163
+producer_rate: 100
+message_warmup: 1000
