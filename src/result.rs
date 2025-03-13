@@ -65,6 +65,30 @@ impl TestResult {
         rounded_value
     }
 
+    fn calculate_data_sent(messages: u128, size: u128)  -> f64 {
+        let value  = messages.checked_mul(size).unwrap_or_else(|| 0);
+        let result = (value / 1000000) as f64;
+        result
+    }
+
+    pub fn add_write_latency(&mut self, value: f64) {
+        if value > 0.0 {
+            self.write_latencies.push(value);
+        }
+    }
+
+    pub fn add_read_latency(&mut self, value: f64) {
+        if value >= 0.0 {
+            self.read_latencies.push(value);
+        }
+    }
+
+    pub fn set_duration(&mut self, value: f64) {
+        if value > 0.0 {
+            self.duration = value;
+        }
+    }
+
     pub fn calculate_metrics(&mut self) {
         // Remove write failures
         let latencies = self.write_latencies.clone();
@@ -100,7 +124,7 @@ impl TestResult {
          *   Total Time   = total duration in seconds
          */
         self.duration   = self.duration / 1000.0;
-        self.sent_data  = (self.message_num * self.message_size as u32) as f64 / 1000000.0;
+        self.sent_data  = Self::calculate_data_sent(self.message_num.into(), self.message_size.into());
         self.throughput = self.sent_data / self.duration;
     }
 

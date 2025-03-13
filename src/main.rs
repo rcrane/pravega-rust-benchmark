@@ -8,7 +8,6 @@ use std::process;
 
 use config::Config;
 use std::sync::Arc;
-use std::sync::mpsc;
 use async_std::task;
 use std::sync::Mutex;
 use chrono::DateTime;
@@ -25,6 +24,7 @@ use pravega_client_shared::ScaleType;
 use pravega_client::event::EventWriter;
 use pravega_client_shared::ScopedStream;
 use pravega_client_shared::RetentionType;
+use std::sync::mpsc::{self, RecvTimeoutError};
 use pravega_client_shared::StreamConfiguration;
 use pravega_client_config::ClientConfigBuilder;
 use pravega_client::client_factory::ClientFactory;
@@ -32,6 +32,8 @@ use pravega_client::client_factory::ClientFactory;
 const START_CONSTANT: i32 = 95;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    env::set_var("RUST_BACKTRACE", "1");
+
     // Getting the workload file configuration form command line parameters
     let args: Vec<String> = env::args().collect();
     if args.len() <= 1 {
@@ -40,7 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     
     // Getting config and payload content
-    let conf = Config::load_from_file( &args[1].clone() ).expect("Could not read config file.");
+    let conf = Config::load_from_file(&args[1].clone()).expect("Could not read config file.");
 
     // Starting Threads
     let (tx1, rx1) = mpsc::channel(); // Start Signal
@@ -57,18 +59,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         receiver_handler(rx1, tx3, config_cpy);
     });
 
-    handler_snd.join().unwrap();
-    handler_rcv.join().unwrap();
+    match handler_snd.join() {
+        Ok(_)  => println!("\t + Writing finished"),
+        Err(e) => println!("\t + Thread panicked: {:?}", e),
+    }
+    match handler_rcv.join() {
+        Ok(_)  => println!("\t - Reading finished"),
+        Err(e) => println!("\t - Thread panicked: {:?}", e),
+    }
 
     // get ouput data from threads
     let mut result = TestResult::new(conf);
-    for received in rx2 {
-        match received {
-            ChannelData::WriteLatency(value)  => result.write_latencies.push(value),
-            ChannelData::ReadLatency(value)   => result.read_latencies.push(value),
-            ChannelData::WriteDuration(value) => result.duration = value
+    println!("\t i Receiving data from threads");
+    let mut errors = 0;
+    while errors < 60 {
+        let item = rx2.recv_timeout(Duration::from_secs(1));
+        match item {
+            Ok(ChannelData::WriteLatency(value))  => result.add_write_latency(value),
+            Ok(ChannelData::ReadLatency(value))   => result.add_read_latency(value),
+            Ok(ChannelData::WriteDuration(value)) => result.set_duration(value),
+            Err(RecvTimeoutError::Timeout)        => {errors += 1; continue;},
+            Err(RecvTimeoutError::Disconnected)   => break
         }
     }
+    println!("\t i Calculating metrics");
     result.calculate_metrics();
     result.to_file().expect("Failed to write results.");
     Ok(())
@@ -110,30 +124,33 @@ fn get_stream_config(conf: Config, scope: Scope) -> StreamConfiguration {
             scale_factor:     conf.scale_factor,
             min_num_segments: conf.scale_min_num_segments,
         },
-        retention: Retention {
+        /*retention: Retention {
             retention_type:  RetentionType::Time,
             retention_param: conf.retention_time,
+        },*/
+        retention: Retention {
+            retention_type:  RetentionType::Size,
+            retention_param: 10485760,
         },
         tags: None,
     };
     stream_config
 }
 
-async fn write_one_event(arc_event_writer: Arc<Mutex<EventWriter>>, payload: Vec<u8>) -> f64 {
+async fn write_one_event(arc_event_writer: Arc<Mutex<EventWriter>>, payload: Vec<u8>) -> Result<f64, std::io::Error> {
     let mut event_writer = arc_event_writer.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let start_time = Utc::now();
     let result = event_writer.write_event(payload).await;
     if !result.await.is_ok() {
-        return -1.0
+        return Ok(-1.0)
     }
 
     let end_time = Utc::now();
     let latency = get_difference(start_time, end_time);
-    latency
+    return Ok(latency)
 }
 
 fn sender_handler(signal: mpsc::Sender<i32>, out: mpsc::Sender<ChannelData>, conf: Config) {
-    //let payload = conf.message.to_string().into_bytes();
     let payload = conf.get_payload();
     let client_factory = create_client(conf.address.clone());
 
@@ -169,7 +186,7 @@ fn sender_handler(signal: mpsc::Sender<i32>, out: mpsc::Sender<ChannelData>, con
         for i in 1..=conf.message_warmup {
             let payload          = payload.clone();
             let arc_event_writer = Arc::clone(&shared_event_writer);
-            write_one_event(arc_event_writer, payload).await;
+            let _ = write_one_event(arc_event_writer, payload).await;
             if i % conf.producer_rate == 0 {
                 thread::sleep(Duration::from_secs(1));
             }
@@ -190,8 +207,11 @@ fn sender_handler(signal: mpsc::Sender<i32>, out: mpsc::Sender<ChannelData>, con
             let payload_cloned   = payload.clone();
             let arc_event_writer = Arc::clone(&shared_event_writer);
             pool.execute(move || {
-                let result = task::block_on( write_one_event(arc_event_writer, payload_cloned) );
-                out_cloned.send(ChannelData::WriteLatency(result)).unwrap();
+                let res = task::block_on( write_one_event(arc_event_writer, payload_cloned) );
+                match res {
+                    Ok(value) => out_cloned.send(ChannelData::WriteLatency(value)).unwrap(),
+                    Err(_) => println!("\t + Error at sending")
+                };
             });
             if i % conf.producer_rate == 0 {
                 println!("\t + Messages Sent {}", i);
@@ -203,11 +223,15 @@ fn sender_handler(signal: mpsc::Sender<i32>, out: mpsc::Sender<ChannelData>, con
             thread::sleep(Duration::from_secs(1));
         }
 
+        println!("\t + Waiting the pool to finish");
+        pool.join();
+
         // Wait for the threads to finish and calculate the total time for benchmark sending.
         let ben_ends = Utc::now();
         let duration = get_difference(ben_start, ben_ends);
         out.send(ChannelData::WriteDuration(duration)).unwrap();
     });
+    drop(out);
 }
 
 fn receiver_handler(signal: mpsc::Receiver<i32>, out: mpsc::Sender<ChannelData>, conf: Config) {
@@ -271,4 +295,5 @@ fn receiver_handler(signal: mpsc::Receiver<i32>, out: mpsc::Sender<ChannelData>,
             .await
             .expect("failed to mark the reader offline");
     });
+    drop(out);
 }
